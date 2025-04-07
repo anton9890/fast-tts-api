@@ -13,8 +13,8 @@ Text-to-Speech API server that combines Llama language model with XTTS v2 for hi
 
 ## Requirements
 
-- Python 3.8+
-- CUDA-compatible GPU (recommended)
+- Python 3.10+
+- CUDA 12.1+ compatible GPU
 - 8GB+ RAM
 - 10GB+ Disk Space (for models)
 
