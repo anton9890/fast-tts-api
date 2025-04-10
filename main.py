@@ -2,26 +2,56 @@ import torch
 import numpy as np
 import json
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 import io
 import wave
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 from huggingface_hub import snapshot_download
 import os
+import sys
 import logging
 from pydantic import BaseModel
 import traceback
 import time
-from transformers import pipeline
+from transformers import AutoProcessor, Llama4ForConditionalGeneration
+import tempfile
+import requests
+from pathlib import Path
+import re
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# 현재 디렉토리 설정
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Wav2Lip API 설정
+WAV2LIP_API_URL = "http://220.118.109.65:8000/inference"
+
 app = FastAPI()
+
+# CORS 미들웨어 추가
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 정적 파일 서빙 설정
+static_dir = os.path.join(current_dir, "static")
+outputs_dir = os.path.join(current_dir, "outputs")
+os.makedirs(static_dir, exist_ok=True)
+os.makedirs(outputs_dir, exist_ok=True)
+
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+app.mount("/outputs", StaticFiles(directory=outputs_dir), name="outputs")
 
 # 템플릿 설정
 templates = Jinja2Templates(directory="templates")
@@ -31,63 +61,100 @@ tts_model = None
 tts_config = None
 gpt_cond_latent = None
 speaker_embedding = None
-llm_pipeline = None
+llm_model = None
+llm_processor = None
+
+# 문장 분리를 위한 최대 텍스트 길이
+MAX_TEXT_LENGTH = 300
 
 class TextRequest(BaseModel):
     text: str
     language: str = "en"
+    super_resolution: bool = False
+
+def call_wav2lip_api(audio_bytes: bytes, face_sr: bool = False) -> bytes:
+    """Wav2Lip API 호출"""
+    try:
+        from io import BytesIO
+        # API URL에 super resolution 옵션 추가
+        url = f"http://220.118.109.65:8000/inference?face_sr={'true' if face_sr else 'false'}"
+        
+        # BytesIO 객체로 감싸서 requests에서 업로드할 수 있도록 처리
+        audio_file = BytesIO(audio_bytes)
+        audio_file.name = "input.wav"  # 업로드될 파일 이름 설정
+        files = {'audio': (audio_file.name, audio_file, 'audio/wav')}
+        
+        response = requests.post(url, files=files)
+        
+        if response.status_code == 200:
+            return response.content
+        else:
+            raise Exception(f"Wav2Lip API 호출 실패: {response.status_code}, {response.text}")
+    except Exception as e:
+        logger.error(f"Wav2Lip API 호출 중 오류 발생: {e}")
+        raise
 
 def initialize_llm():
-    """Llama 모델 초기화"""
-    global llm_pipeline
+    """Llama 4 모델 초기화"""
+    global llm_model, llm_processor
     try:
-        logger.info("Llama 모델 초기화 중...")
-        model_id = "meta-llama/Llama-3.2-1B-Instruct"
-        llm_pipeline = pipeline(
-            "text-generation",
-            model=model_id,
-            torch_dtype=torch.bfloat16,
+        logger.info("Llama 4 모델 초기화 중...")
+        model_id = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
+        
+        llm_processor = AutoProcessor.from_pretrained(model_id)
+        llm_model = Llama4ForConditionalGeneration.from_pretrained(
+            model_id,
+            attn_implementation="flex_attention",
             device_map="auto",
+            torch_dtype=torch.bfloat16,
         )
-        logger.info("Llama 모델 초기화 완료")
+        logger.info("Llama 4 모델 초기화 완료")
     except Exception as e:
-        logger.error(f"Llama 모델 초기화 중 오류 발생: {e}")
+        logger.error(f"Llama 4 모델 초기화 중 오류 발생: {e}")
         logger.error(traceback.format_exc())
         raise
 
 def get_llm_response(text: str) -> str:
-    """Llama 모델을 사용하여 응답 생성"""
+    """Llama 4 모델을 사용하여 응답 생성"""
     try:
-        if llm_pipeline is None:
-            logger.warning("Llama 모델이 초기화되지 않았습니다.")
+        if llm_model is None or llm_processor is None:
+            logger.warning("Llama 4 모델이 초기화되지 않았습니다.")
             return f"I received your message: {text}"
 
-        # 프롬프트 형식 수정
-        prompt = f"### Human: {text}\n### Assistant:"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text}
+                ]
+            }
+        ]
         
-        outputs = llm_pipeline(
-            prompt,
+        inputs = llm_processor.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt"
+        ).to(llm_model.device)
+        
+        outputs = llm_model.generate(
+            **inputs,
             max_new_tokens=256,
             temperature=0.7,
             top_p=0.9,
             do_sample=True,
-            num_return_sequences=1,
         )
         
-        # 응답 추출 및 정리
-        if isinstance(outputs, list) and len(outputs) > 0:
-            response = outputs[0]['generated_text']
-            # 입력 프롬프트 제거
-            response = response.replace(prompt, "").strip()
-            # 추가 Human/Assistant 마커 제거
-            response = response.split("### Human:")[0].strip()
-            return response
-        else:
-            logger.warning("Llama 모델이 빈 응답을 반환했습니다.")
-            return f"I received your message: {text}"
+        response = llm_processor.batch_decode(
+            outputs[:, inputs["input_ids"].shape[-1]:],
+            skip_special_tokens=True
+        )[0]
+        
+        return response.strip()
             
     except Exception as e:
-        logger.error(f"Llama 응답 생성 중 오류 발생: {e}")
+        logger.error(f"Llama 4 응답 생성 중 오류 발생: {e}")
         logger.error(traceback.format_exc())
         return f"I received your message: {text}"
 
@@ -110,7 +177,12 @@ async def startup_event():
     global tts_model, tts_config, gpt_cond_latent, speaker_embedding
     
     try:
-        # TTS 모델 다운로드
+        # outputs 디렉토리 생성
+        outputs_dir = os.path.join(current_dir, 'outputs')
+        os.makedirs(outputs_dir, exist_ok=True)
+        logger.info(f"outputs 디렉토리 생성/확인: {outputs_dir}")
+        
+        # TTS 모델 다운로드 및 초기화
         model_path = download_model()
         
         # TTS 설정 파일 로드
@@ -127,17 +199,11 @@ async def startup_event():
         tts_model = Xtts.init_from_config(tts_config)
         tts_model.load_checkpoint(tts_config, checkpoint_dir=model_path, use_deepspeed=True)
         
-        # GPU 사용 설정
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info(f"사용 중인 장치: {device}")
         tts_model.to(device)
         
         # 기본 스피커 임베딩 계산
         reference_audio_path = os.path.join(model_path, "input/input_1.wav")
-        if not os.path.exists(reference_audio_path):
-            raise FileNotFoundError(f"기본 스피커 오디오 파일을 찾을 수 없습니다: {reference_audio_path}")
-            
-        logger.info("스피커 임베딩 계산 중...")
         gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(audio_path=[reference_audio_path])
         
         # Llama 모델 초기화
@@ -158,64 +224,135 @@ async def read_root(request: Request):
 @app.get("/health")
 async def health_check():
     """서버 상태 확인"""
-    if tts_model is None or tts_config is None or gpt_cond_latent is None or speaker_embedding is None:
+    if tts_model is None or tts_config is None:
         raise HTTPException(status_code=503, detail="서버가 아직 준비되지 않았습니다.")
     return {"status": "ok"}
 
-@app.post("/tts")
-async def text_to_speech(request: TextRequest):
-    """텍스트를 음성으로 변환"""
-    if tts_model is None or tts_config is None or gpt_cond_latent is None or speaker_embedding is None:
-        raise HTTPException(status_code=503, detail="서버가 아직 준비되지 않았습니다.")
+def split_into_sentences(text: str) -> list:
+    """텍스트를 문장 단위로 분리"""
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    return [s.strip() for s in sentences if s.strip()]
+
+def combine_audio_segments(segments: list) -> np.ndarray:
+    """여러 오디오 세그먼트를 하나로 결합"""
+    silence_duration = int(24000 * 0.3)  # 0.3초 무음
+    silence = np.zeros(silence_duration)
     
-    try:
-        # Llama로 응답 생성
-        logger.info(f"Llama 응답 생성 시작: text='{request.text}'")
-        llm_response = get_llm_response(request.text)
-        logger.info(f"Llama 응답: {llm_response}")
+    combined = []
+    for segment in segments:
+        combined.extend(segment)
+        combined.extend(silence)
+    
+    return np.array(combined)
+
+def process_tts(text: str, language: str, model: Xtts, gpt_cond_latent, speaker_embedding) -> np.ndarray:
+    """TTS 처리 함수"""
+    if len(text) > MAX_TEXT_LENGTH:
+        logger.info(f"텍스트 길이가 {MAX_TEXT_LENGTH}자를 초과하여 문장 단위로 처리합니다.")
+        sentences = split_into_sentences(text)
+        audio_segments = []
         
-        # TTS로 음성 생성
-        logger.info("음성 생성 시작")
-        t0 = time.time()
-        
-        outputs = tts_model.inference(
-            text=llm_response,  # Llama 응답을 TTS 입력으로 사용
-            language=request.language,
-            gpt_cond_latent=gpt_cond_latent,
-            speaker_embedding=speaker_embedding
-        )
-        
-        # WAV 파일 생성
-        wav_buffer = io.BytesIO()
-        with wave.open(wav_buffer, 'wb') as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(24000)  # 샘플링 레이트를 24000으로 고정
-            
-            # 오디오 데이터를 WAV 파일에 기록
+        for i, sentence in enumerate(sentences, 1):
+            logger.info(f"문장 {i}/{len(sentences)} 처리 중...")
+            outputs = model.inference(
+                text=sentence,
+                language=language,
+                gpt_cond_latent=gpt_cond_latent,
+                speaker_embedding=speaker_embedding,
+            )
             audio_data = outputs['wav']
             if isinstance(audio_data, torch.Tensor):
                 audio_data = audio_data.cpu().numpy()
-            elif isinstance(audio_data, np.ndarray):
-                audio_data = audio_data.squeeze()  # 불필요한 차원 제거
-            
-            # 오디오 데이터 정규화 및 변환
-            audio_data = np.clip(audio_data, -1.0, 1.0)  # 값 범위 제한
+            audio_segments.append(audio_data)
+        
+        return combine_audio_segments(audio_segments)
+    else:
+        outputs = model.inference(
+            text=text,
+            language=language,
+            gpt_cond_latent=gpt_cond_latent,
+            speaker_embedding=speaker_embedding,
+        )
+        audio_data = outputs['wav']
+        if isinstance(audio_data, torch.Tensor):
+            audio_data = audio_data.cpu().numpy()
+        return audio_data
+
+@app.post("/tts")
+async def text_to_speech(request: TextRequest):
+    """텍스트를 음성으로 립싱크 비디오로 변환"""
+    if not all([tts_model]):
+        raise HTTPException(status_code=503, detail="서버가 아직 준비되지 않았습니다.")
+    
+    start_total = time.time()
+    
+    try:
+        # Llama로 응답 생성
+        start_llm = time.time()
+        llm_response = get_llm_response(request.text)
+        llm_time = time.time() - start_llm
+        logger.info(f"LLM 처리 시간: {llm_time:.2f}초")
+        
+        # TTS 처리
+        start_tts = time.time()
+        audio_data = process_tts(
+            llm_response, 
+            request.language, 
+            tts_model, 
+            gpt_cond_latent, 
+            speaker_embedding
+        )
+        
+        # 오디오를 바이트로 변환
+        audio_bytes = io.BytesIO()
+        with wave.open(audio_bytes, 'wb') as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24000)
+            audio_data = np.clip(audio_data, -1.0, 1.0)
             audio_data = (audio_data * 32767).astype(np.int16)
             wav_file.writeframes(audio_data.tobytes())
         
-        wav_buffer.seek(0)
-        logger.info(f"음성 생성 완료 (소요 시간: {time.time() - t0:.2f}초)")
+        tts_time = time.time() - start_tts
+        logger.info(f"TTS 처리 시간: {tts_time:.2f}초")
         
-        # 스트리밍 응답 반환
-        return StreamingResponse(
-            wav_buffer,
-            media_type="audio/wav",
-            headers={
-                "Content-Disposition": "attachment; filename=output.wav",
-                "X-LLM-Response": llm_response  # Llama 응답을 헤더에 포함
+        # Wav2Lip API 호출
+        start_wav2lip = time.time()
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_video = os.path.join(outputs_dir, f"output_{timestamp}.mp4")
+        
+        video_data = call_wav2lip_api(audio_bytes.getvalue(), request.super_resolution)
+        with open(output_video, 'wb') as f:
+            f.write(video_data)
+            
+        wav2lip_time = time.time() - start_wav2lip
+        logger.info(f"Wav2Lip API 처리 시간: {wav2lip_time:.2f}초")
+        
+        if not os.path.exists(output_video):
+            raise HTTPException(status_code=500, detail="비디오 생성에 실패했습니다.")
+        
+        # 파일 URL 생성
+        video_filename = os.path.basename(output_video)
+        video_url = f"/outputs/{video_filename}"
+        
+        total_time = time.time() - start_total
+        logger.info(f"\n처리 시간 요약:")
+        logger.info(f"- LLM: {llm_time:.2f}초")
+        logger.info(f"- TTS: {tts_time:.2f}초")
+        logger.info(f"- Wav2Lip API: {wav2lip_time:.2f}초")
+        logger.info(f"- 총 소요 시간: {total_time:.2f}초")
+        
+        return {
+            "video_url": video_url,
+            "llm_response": llm_response,
+            "status": "success",
+            "processing_times": {
+                "llm": round(llm_time, 2),
+                "tts": round(tts_time, 2),
+                "wav2lip": round(wav2lip_time, 2),
+                "total": round(total_time, 2)
             }
-        )
+        }
         
     except Exception as e:
         logger.error(f"처리 중 오류 발생: {e}")
@@ -224,9 +361,4 @@ async def text_to_speech(request: TextRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8001,
-        workers=1
-    ) 
+    uvicorn.run(app, host="0.0.0.0", port=8001, workers=1) 

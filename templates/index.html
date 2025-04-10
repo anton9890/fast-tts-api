@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>TTS Web Interface</title>
+    <title>AI Speech Synthesis with Lip Sync</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -16,6 +16,9 @@
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
+        .input-section {
+            margin-bottom: 20px;
+        }
         textarea {
             width: 100%;
             height: 100px;
@@ -23,6 +26,19 @@
             padding: 10px;
             border: 1px solid #ddd;
             border-radius: 4px;
+            font-size: 14px;
+            resize: vertical;
+        }
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        select {
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
         }
         button {
             background-color: #4CAF50;
@@ -32,6 +48,7 @@
             border-radius: 4px;
             cursor: pointer;
             font-size: 16px;
+            min-width: 120px;
         }
         button:hover {
             background-color: #45a049;
@@ -41,29 +58,115 @@
             cursor: not-allowed;
         }
         .status {
-            margin-top: 10px;
+            margin-left: 10px;
             color: #666;
         }
-        audio {
-            width: 100%;
+        .output-section {
             margin-top: 20px;
+            display: none;
+        }
+        .video-container {
+            width: 100%;
+            max-width: 640px;
+            margin: 0 auto;
+            background-color: #000;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        video {
+            width: 100%;
+            display: block;
+        }
+        .response-text {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border-left: 4px solid #4CAF50;
+        }
+        .processing-times {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border-left: 4px solid #007bff;
+            font-family: monospace;
+        }
+        .processing-times table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .processing-times td {
+            padding: 4px 8px;
+        }
+        .processing-times td:first-child {
+            font-weight: bold;
+            width: 100px;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4CAF50;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 10px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Text to Speech</h1>
-        <textarea id="textInput" placeholder="Enter text here..."></textarea>
-        <div>
-            <button id="generateBtn" onclick="generateSpeech()">Generate Speech</button>
-            <span id="status" class="status"></span>
+        <h1>AI Speech Synthesis with Lip Sync</h1>
+        
+        <div class="input-section">
+            <textarea id="textInput" placeholder="Enter text here..."></textarea>
+            <div class="controls">
+                <select id="languageSelect">
+                    <option value="en">English</option>
+                    <option value="ko">한국어</option>
+                    <option value="ja">日本語</option>
+                    <option value="zh">中文</option>
+                </select>
+                <div class="checkbox-container">
+                    <input type="checkbox" id="superResolution" name="superResolution">
+                    <label for="superResolution">Super Resolution</label>
+                </div>
+                <button id="generateBtn" onclick="generateVideo()">Generate Video</button>
+                <div id="loadingIndicator" class="loading" style="display: none;"></div>
+                <span id="status" class="status"></span>
+            </div>
         </div>
-        <audio id="audioPlayer" controls style="display: none;"></audio>
+
+        <div id="outputSection" class="output-section">
+            <div class="video-container">
+                <video id="videoPlayer" controls>
+                    Your browser does not support the video element.
+                </video>
+            </div>
+            <div id="responseText" class="response-text"></div>
+            <div id="processingTimes" class="processing-times">
+                <table>
+                    <tr><td>LLM:</td><td id="llmTime">-</td></tr>
+                    <tr><td>TTS:</td><td id="ttsTime">-</td></tr>
+                    <tr><td>Wav2Lip:</td><td id="wav2lipTime">-</td></tr>
+                    <tr><td>Total:</td><td id="totalTime">-</td></tr>
+                </table>
+            </div>
+        </div>
     </div>
 
     <script>
-        async function generateSpeech() {
+        async function generateVideo() {
             const text = document.getElementById('textInput').value;
+            const language = document.getElementById('languageSelect').value;
+            const superResolution = document.getElementById('superResolution').checked;
+            
             if (!text) {
                 alert('Please enter some text');
                 return;
@@ -71,11 +174,15 @@
 
             const btn = document.getElementById('generateBtn');
             const status = document.getElementById('status');
-            const audioPlayer = document.getElementById('audioPlayer');
+            const loading = document.getElementById('loadingIndicator');
+            const outputSection = document.getElementById('outputSection');
+            const videoPlayer = document.getElementById('videoPlayer');
+            const responseText = document.getElementById('responseText');
 
             btn.disabled = true;
-            status.textContent = 'Generating speech...';
-            audioPlayer.style.display = 'none';
+            loading.style.display = 'inline-block';
+            status.textContent = superResolution ? 'Generating high-resolution video...' : 'Generating video...';
+            outputSection.style.display = 'none';
 
             try {
                 const response = await fetch('/tts', {
@@ -85,24 +192,57 @@
                     },
                     body: JSON.stringify({
                         text: text,
-                        language: 'en'
+                        language: language,
+                        super_resolution: superResolution
                     })
                 });
 
                 if (!response.ok) {
-                    throw new Error('Failed to generate speech');
+                    throw new Error('Failed to generate video');
                 }
 
-                const blob = await response.blob();
-                const audioUrl = URL.createObjectURL(blob);
-                audioPlayer.src = audioUrl;
-                audioPlayer.style.display = 'block';
-                audioPlayer.play();
-                status.textContent = 'Speech generated successfully!';
+                const data = await response.json();
+                
+                if (data.status !== 'success') {
+                    throw new Error('Video generation failed');
+                }
+
+                // Update video source with the URL
+                videoPlayer.src = data.video_url;
+                responseText.textContent = data.llm_response;
+                
+                // Update processing times
+                document.getElementById('llmTime').textContent = `${data.processing_times.llm}초`;
+                document.getElementById('ttsTime').textContent = `${data.processing_times.tts}초`;
+                document.getElementById('wav2lipTime').textContent = `${data.processing_times.wav2lip}초`;
+                document.getElementById('totalTime').textContent = `${data.processing_times.total}초`;
+                
+                // 비디오 로드 완료 이벤트 처리
+                videoPlayer.onloadeddata = function() {
+                    outputSection.style.display = 'block';
+                    status.textContent = 'Video generated successfully!';
+                };
+                
+                // 비디오 로드 실패 이벤트 처리
+                videoPlayer.onerror = function() {
+                    status.textContent = 'Error loading video';
+                    console.error('Video load error:', videoPlayer.error);
+                };
+                
+                // 비디오 자동 재생
+                videoPlayer.load();
+                videoPlayer.play().catch(e => {
+                    console.warn('Auto-play failed:', e);
+                    status.textContent += ' (Click to play)';
+                });
+                
             } catch (error) {
                 status.textContent = 'Error: ' + error.message;
+                console.error('Error:', error);
+                outputSection.style.display = 'none';
             } finally {
                 btn.disabled = false;
+                loading.style.display = 'none';
             }
         }
     </script>
