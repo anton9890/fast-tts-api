@@ -17,7 +17,7 @@ import logging
 from pydantic import BaseModel
 import traceback
 import time
-from transformers import AutoProcessor, Llama4ForConditionalGeneration
+from transformers import pipeline
 import tempfile
 import requests
 from pathlib import Path
@@ -61,8 +61,7 @@ tts_model = None
 tts_config = None
 gpt_cond_latent = None
 speaker_embedding = None
-llm_model = None
-llm_processor = None
+llm_pipeline = None
 
 # 문장 분리를 위한 최대 텍스트 길이
 MAX_TEXT_LENGTH = 300
@@ -95,66 +94,80 @@ def call_wav2lip_api(audio_bytes: bytes, face_sr: bool = False) -> bytes:
         raise
 
 def initialize_llm():
-    """Llama 4 모델 초기화"""
-    global llm_model, llm_processor
+    """Llama 3 모델 초기화"""
+    global llm_pipeline
     try:
-        logger.info("Llama 4 모델 초기화 중...")
-        model_id = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
+        logger.info("Llama 3 모델 초기화 중...")
+        model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
         
-        llm_processor = AutoProcessor.from_pretrained(model_id)
-        llm_model = Llama4ForConditionalGeneration.from_pretrained(
-            model_id,
-            attn_implementation="flex_attention",
+        llm_pipeline = pipeline(
+            "text-generation",
+            model=model_id,
+            model_kwargs={"torch_dtype": torch.bfloat16},
             device_map="auto",
-            torch_dtype=torch.bfloat16,
         )
-        logger.info("Llama 4 모델 초기화 완료")
+        logger.info("Llama 3 모델 초기화 완료")
     except Exception as e:
-        logger.error(f"Llama 4 모델 초기화 중 오류 발생: {e}")
+        logger.error(f"Llama 3 모델 초기화 중 오류 발생: {e}")
         logger.error(traceback.format_exc())
         raise
 
 def get_llm_response(text: str) -> str:
-    """Llama 4 모델을 사용하여 응답 생성"""
+    """Llama 3 모델을 사용하여 응답 생성"""
     try:
-        if llm_model is None or llm_processor is None:
-            logger.warning("Llama 4 모델이 초기화되지 않았습니다.")
+        if llm_pipeline is None:
+            logger.warning("Llama 3 모델이 초기화되지 않았습니다.")
             return f"I received your message: {text}"
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": text}
-                ]
-            }
+        # 프롬프트 형식 지정
+        system_prompt = """You are a friendly and helpful AI assistant who speaks in a natural, conversational way. 
+When responding:
+- Use a warm and engaging tone
+- Keep explanations simple and relatable
+- Use everyday language instead of technical jargon when possible
+- Include brief examples or analogies when helpful
+- Show empathy and enthusiasm in your responses
+- Feel free to use casual expressions and contractions (like "I'm", "let's", etc.)
+- Keep responses concise but informative
+
+Remember to always be helpful while maintaining a natural, human-like conversation style."""
+
+        prompt = f"""### System: {system_prompt}
+
+### Human: {text}
+
+### Assistant: """
+        
+        # EOS 토큰 ID 설정
+        terminators = [
+            llm_pipeline.tokenizer.eos_token_id,
+            llm_pipeline.tokenizer.convert_tokens_to_ids("<|eot_id|>")
         ]
         
-        inputs = llm_processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt"
-        ).to(llm_model.device)
-        
-        outputs = llm_model.generate(
-            **inputs,
+        outputs = llm_pipeline(
+            prompt,
             max_new_tokens=256,
-            temperature=0.7,
-            top_p=0.9,
+            eos_token_id=terminators,
             do_sample=True,
+            temperature=0.7,  # 약간 높여서 더 다양한 응답 생성
+            top_p=0.9,
         )
         
-        response = llm_processor.batch_decode(
-            outputs[:, inputs["input_ids"].shape[-1]:],
-            skip_special_tokens=True
-        )[0]
+        # 응답 추출 및 정리
+        response = outputs[0]["generated_text"]
+        # 프롬프트 제거
+        response = response.replace(prompt, "").strip()
+        # 다음 대화 턴 제거
+        response = response.split("### Human:")[0].strip()
         
-        return response.strip()
+        if not response:
+            logger.warning("모델이 빈 응답을 반환했습니다.")
+            return f"I received your message: {text}"
+            
+        return response
             
     except Exception as e:
-        logger.error(f"Llama 4 응답 생성 중 오류 발생: {e}")
+        logger.error(f"Llama 3 응답 생성 중 오류 발생: {e}")
         logger.error(traceback.format_exc())
         return f"I received your message: {text}"
 
@@ -203,7 +216,7 @@ async def startup_event():
         tts_model.to(device)
         
         # 기본 스피커 임베딩 계산
-        reference_audio_path = os.path.join(model_path, "input/input_1.wav")
+        reference_audio_path = os.path.join(model_path, "input/tts_input.wav")
         gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(audio_path=[reference_audio_path])
         
         # Llama 모델 초기화
