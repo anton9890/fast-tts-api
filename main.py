@@ -249,130 +249,85 @@ def split_into_sentences(text: str) -> list:
 
 def combine_audio_segments(segments: list) -> np.ndarray:
     """여러 오디오 세그먼트를 하나로 결합"""
-    silence_duration = int(24000 * 0.3)  # 0.3초 무음
-    silence = np.zeros(silence_duration)
-    
-    combined = []
-    for segment in segments:
-        combined.extend(segment)
-        combined.extend(silence)
-    
-    return np.array(combined)
+    if not segments:
+        return np.array([])
+    return np.concatenate(segments)
 
 def process_tts(text: str, language: str, model: Xtts, gpt_cond_latent, speaker_embedding) -> np.ndarray:
     """TTS 처리 함수"""
-    if len(text) > MAX_TEXT_LENGTH:
-        logger.info(f"텍스트 길이가 {MAX_TEXT_LENGTH}자를 초과하여 문장 단위로 처리합니다.")
+    try:
+        # 긴 텍스트를 문장 단위로 분리
         sentences = split_into_sentences(text)
         audio_segments = []
         
-        for i, sentence in enumerate(sentences, 1):
-            logger.info(f"문장 {i}/{len(sentences)} 처리 중...")
-            outputs = model.inference(
-                text=sentence,
-                language=language,
-                gpt_cond_latent=gpt_cond_latent,
-                speaker_embedding=speaker_embedding,
+        for sentence in sentences:
+            # 각 문장에 대해 TTS 처리
+            audio = model.inference(
+                sentence,
+                language,
+                gpt_cond_latent,
+                speaker_embedding,
+                temperature=0.7,
             )
-            audio_data = outputs['wav']
-            if isinstance(audio_data, torch.Tensor):
-                audio_data = audio_data.cpu().numpy()
-            audio_segments.append(audio_data)
+            audio_segments.append(audio)
         
+        # 모든 오디오 세그먼트 결합
         return combine_audio_segments(audio_segments)
-    else:
-        outputs = model.inference(
-            text=text,
-            language=language,
-            gpt_cond_latent=gpt_cond_latent,
-            speaker_embedding=speaker_embedding,
-        )
-        audio_data = outputs['wav']
-        if isinstance(audio_data, torch.Tensor):
-            audio_data = audio_data.cpu().numpy()
-        return audio_data
+        
+    except Exception as e:
+        logger.error(f"TTS 처리 중 오류 발생: {e}")
+        logger.error(traceback.format_exc())
+        raise
 
 @app.post("/tts")
 async def text_to_speech(request: TextRequest):
-    """텍스트를 음성으로 립싱크 비디오로 변환"""
-    if not all([tts_model]):
-        raise HTTPException(status_code=503, detail="서버가 아직 준비되지 않았습니다.")
-    
-    start_total = time.time()
-    
+    """텍스트를 음성으로 변환하고 Wav2Lip으로 처리"""
     try:
-        # Llama로 응답 생성
-        start_llm = time.time()
-        llm_response = get_llm_response(request.text)
-        llm_time = time.time() - start_llm
-        logger.info(f"LLM 처리 시간: {llm_time:.2f}초")
+        start_time = time.time()
         
-        # TTS 처리
-        start_tts = time.time()
-        audio_data = process_tts(
-            llm_response, 
-            request.language, 
-            tts_model, 
-            gpt_cond_latent, 
+        # LLM으로 응답 생성
+        llm_response = get_llm_response(request.text)
+        llm_time = time.time()
+        logger.info(f"LLM 응답 생성 시간: {llm_time - start_time:.2f}초")
+        
+        # TTS로 음성 생성
+        audio_array = process_tts(
+            llm_response,
+            request.language,
+            tts_model,
+            gpt_cond_latent,
             speaker_embedding
         )
+        tts_time = time.time()
+        logger.info(f"TTS 처리 시간: {tts_time - llm_time:.2f}초")
         
-        # 오디오를 바이트로 변환
-        audio_bytes = io.BytesIO()
-        with wave.open(audio_bytes, 'wb') as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(24000)
-            audio_data = np.clip(audio_data, -1.0, 1.0)
-            audio_data = (audio_data * 32767).astype(np.int16)
-            wav_file.writeframes(audio_data.tobytes())
-        
-        tts_time = time.time() - start_tts
-        logger.info(f"TTS 처리 시간: {tts_time:.2f}초")
+        # 오디오를 WAV 형식으로 변환
+        with io.BytesIO() as wav_buffer:
+            with wave.open(wav_buffer, 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(24000)
+                wav_file.writeframes((audio_array * 32767).astype(np.int16).tobytes())
+            audio_bytes = wav_buffer.getvalue()
         
         # Wav2Lip API 호출
-        start_wav2lip = time.time()
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        output_video = os.path.join(outputs_dir, f"output_{timestamp}.mp4")
+        video_bytes = call_wav2lip_api(audio_bytes, face_sr=request.super_resolution)
+        wav2lip_time = time.time()
+        logger.info(f"Wav2Lip 처리 시간: {wav2lip_time - tts_time:.2f}초")
         
-        video_data = call_wav2lip_api(audio_bytes.getvalue(), request.super_resolution)
-        with open(output_video, 'wb') as f:
-            f.write(video_data)
-            
-        wav2lip_time = time.time() - start_wav2lip
-        logger.info(f"Wav2Lip API 처리 시간: {wav2lip_time:.2f}초")
+        # 결과 비디오를 파일로 저장
+        timestamp = int(time.time())
+        video_filename = f"result_{timestamp}.mp4"
+        video_path = os.path.join(outputs_dir, video_filename)
         
-        if not os.path.exists(output_video):
-            raise HTTPException(status_code=500, detail="비디오 생성에 실패했습니다.")
+        with open(video_path, "wb") as f:
+            f.write(video_bytes)
         
-        # 파일 URL 생성
-        video_filename = os.path.basename(output_video)
+        # 비디오 URL 반환
         video_url = f"/outputs/{video_filename}"
-        
-        total_time = time.time() - start_total
-        logger.info(f"\n처리 시간 요약:")
-        logger.info(f"- LLM: {llm_time:.2f}초")
-        logger.info(f"- TTS: {tts_time:.2f}초")
-        logger.info(f"- Wav2Lip API: {wav2lip_time:.2f}초")
-        logger.info(f"- 총 소요 시간: {total_time:.2f}초")
-        
-        return {
-            "video_url": video_url,
-            "llm_response": llm_response,
-            "status": "success",
-            "processing_times": {
-                "llm": round(llm_time, 2),
-                "tts": round(tts_time, 2),
-                "wav2lip": round(wav2lip_time, 2),
-                "total": round(total_time, 2)
-            }
-        }
+        return {"url": video_url, "text": llm_response}
         
     except Exception as e:
         logger.error(f"처리 중 오류 발생: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001, workers=1) 
