@@ -2,5 +2,4 @@
 models/
 __pycache__/
 *.py[cod]
-*.wav
 outputs/
