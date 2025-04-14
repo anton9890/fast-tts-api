@@ -98,7 +98,7 @@ def initialize_llm():
     global llm_pipeline
     try:
         logger.info("Llama 3 모델 초기화 중...")
-        model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
+        model_id = "meta-llama/Llama-3.2-1B-Instruct"
         
         llm_pipeline = pipeline(
             "text-generation",
@@ -122,15 +122,16 @@ def get_llm_response(text: str) -> str:
         # 프롬프트 형식 지정
         system_prompt = """You are a friendly and helpful AI assistant who speaks in a natural, conversational way. 
 When responding:
+- Keep responses concise and to the point
 - Use a warm and engaging tone
 - Keep explanations simple and relatable
-- Use everyday language instead of technical jargon when possible
-- Include brief examples or analogies when helpful
-- Show empathy and enthusiasm in your responses
-- Feel free to use casual expressions and contractions (like "I'm", "let's", etc.)
-- Keep responses concise but informative
+- Use everyday language instead of technical jargon
+- Include brief examples when needed (but keep them short)
+- Show empathy in your responses
+- Use casual expressions and contractions
+- Aim for 2-3 sentences per response unless more detail is specifically requested
 
-Remember to always be helpful while maintaining a natural, human-like conversation style."""
+Remember to always be helpful while keeping responses brief and natural."""
 
         prompt = f"""### System: {system_prompt}
 
@@ -216,7 +217,7 @@ async def startup_event():
         tts_model.to(device)
         
         # 기본 스피커 임베딩 계산
-        reference_audio_path = os.path.join(model_path, "input/tts_input.wav")
+        reference_audio_path = "input/tts_input.wav"
         gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(audio_path=[reference_audio_path])
         
         # Llama 모델 초기화
