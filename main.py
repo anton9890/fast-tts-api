@@ -34,7 +34,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 WAV2LIP_HOST = os.getenv("WAV2LIP_HOST")
 
 if WAV2LIP_HOST is None:
-    raise RuntimeError("환경변수 'WAV2LIP_HOST'가 설정되지 않았습니다. 예: 220.118.109.65:8000")
+    raise RuntimeError("환경변수 'WAV2LIP_HOST'가 설정되지 않았습니다.")
 
 # 전체 URL 조립
 WAV2LIP_API_URL = f"http://{WAV2LIP_HOST}/inference"
@@ -383,4 +383,6 @@ async def text_to_speech(request: TextRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001, workers=1) 
+    uvicorn.run(app, host="0.0.0.0", port=8000, workers=1) 
+
+#docker run -d -e HF_TOKEN={huggingface_token} -e WAV2LIP_HOST={WAV2LIP_HOST} --gpus all -p 8000:8000 princesslucy/fast-tts-api:latest

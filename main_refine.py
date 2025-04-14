@@ -145,4 +145,4 @@ if __name__ == "__main__":
     
     
 
-#docker run -d -e HF_TOKEN={huggingface_token} -e WAV2LIP_HOST={WAV2LIP_HOST} --gpus all -p 8001:8001 princesslucy/fast-tts-api:latest
+#docker run -d -e HF_TOKEN={huggingface_token} -e WAV2LIP_HOST={WAV2LIP_HOST} --gpus all -p 8000:8000 princesslucy/fast-tts-api:latest

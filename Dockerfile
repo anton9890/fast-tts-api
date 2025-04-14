@@ -1,8 +1,6 @@
 FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-devel
 
 ENV DEBIAN_FRONTEND=noninteractive
-ARG HF_TOKEN
-ENV HF_TOKEN=${HF_TOKEN}
 
 # 기본 패키지 설치
 RUN apt-get update && apt-get install -y \
@@ -17,9 +15,6 @@ RUN apt-get update && apt-get install -y \
 # pip 최신화 + huggingface-cli 설치
 RUN pip3 install --upgrade pip && pip install huggingface_hub
 
-# Hugging Face 로그인
-RUN huggingface-cli login --token $HF_TOKEN
-
 # 작업 디렉토리 설정
 WORKDIR /app
 
@@ -30,10 +25,19 @@ COPY . .
 RUN mkdir -p outputs models && chmod -R 777 outputs models
 
 # 포트 노출
-EXPOSE 8001
+EXPOSE 8000
 
 # requirements 설치
 RUN pip install -r requirements.txt
 
-# 서버 실행
-CMD ["python3", "main.py"]
+# Hugging Face 로그인 + 서버 실행 스크립트 작성
+RUN echo '#!/bin/bash\n\
+if [ -z "$HF_TOKEN" ]; then\n\
+  echo "ERROR: HF_TOKEN 환경변수가 설정되지 않았습니다."\n\
+  exit 1\n\
+fi\n\
+huggingface-cli login --token $HF_TOKEN\n\
+python3 main.py' > /app/start.sh && chmod +x /app/start.sh
+
+# 컨테이너 시작 시 실행할 명령
+CMD ["/app/start.sh"]
