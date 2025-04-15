@@ -22,6 +22,7 @@ import tempfile
 import requests
 from pathlib import Path
 import re
+import subprocess  # 파일 상단에 추가
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -59,7 +60,7 @@ os.makedirs(static_dir, exist_ok=True)
 os.makedirs(outputs_dir, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
-app.mount("/outputs", StaticFiles(directory=outputs_dir), name="outputs")
+app.mount("/outputs", StaticFiles(directory=outputs_dir, html=True), name="outputs")
 
 # 템플릿 설정
 templates = Jinja2Templates(directory="templates")
@@ -300,6 +301,29 @@ def process_tts(text: str, language: str, model: Xtts, gpt_cond_latent, speaker_
             audio_data = audio_data.cpu().numpy()
         return audio_data
 
+def convert_to_webm(input_video: str, output_video: str) -> bool:
+    """비디오를 WebM 형식으로 변환"""
+    try:
+        command = [
+            'ffmpeg', '-i', input_video,
+            '-c:v', 'libvpx-vp9',  # VP9 비디오 코덱
+            '-c:a', 'libopus',     # Opus 오디오 코덱
+            '-b:v', '1M',          # 비디오 비트레이트
+            '-b:a', '128k',        # 오디오 비트레이트
+            '-cpu-used', '4',        # 인코딩 속도/품질 트레이드오프
+            '-f', 'webm',            # WebM 컨테이너
+            '-y',                    # 기존 파일 덮어쓰기
+            output_video
+        ]
+        subprocess.run(command, check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"비디오 변환 중 오류 발생: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"예상치 못한 오류 발생: {e}")
+        return False
+
 @app.post("/tts")
 async def text_to_speech(request: TextRequest):
     """텍스트를 음성으로 립싱크 비디오로 변환"""
@@ -339,15 +363,28 @@ async def text_to_speech(request: TextRequest):
         logger.info(f"TTS 처리 시간: {tts_time:.2f}초")
         
         # Wav2Lip API 호출
-        start_wav2lip = time.time()
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        output_video = os.path.join(outputs_dir, f"output_{timestamp}.mp4")
         
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        temp_output = os.path.join(outputs_dir, f"temp_output_{timestamp}.mp4")
+        output_video = os.path.join(outputs_dir, f"output_{timestamp}.webm")
+        
+        start_wav2lip = time.time()
         video_data = call_wav2lip_api(audio_bytes.getvalue(), request.super_resolution)
-        with open(output_video, 'wb') as f:
-            f.write(video_data)
-            
         wav2lip_time = time.time() - start_wav2lip
+        with open(temp_output, 'wb') as f:
+            f.write(video_data)
+        
+        # WebM 형식으로 변환
+        if not convert_to_webm(temp_output, output_video):
+            raise HTTPException(status_code=500, detail="비디오 변환에 실패했습니다.")
+        
+        # 임시 파일 삭제
+        try:
+            os.remove(temp_output)
+        except Exception as e:
+            logger.warning(f"임시 파일 삭제 실패: {e}")
+            
+        
         logger.info(f"Wav2Lip API 처리 시간: {wav2lip_time:.2f}초")
         
         if not os.path.exists(output_video):

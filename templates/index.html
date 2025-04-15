@@ -146,6 +146,7 @@
         <div id="outputSection" class="output-section">
             <div class="video-container">
                 <video id="videoPlayer" controls>
+                    <source src="" type="video/webm">
                     Your browser does not support the video element.
                 </video>
             </div>
@@ -208,7 +209,8 @@
                 }
 
                 // Update video source with the URL
-                videoPlayer.src = data.video_url;
+                videoPlayer.innerHTML = `<source src="${data.video_url}" type="video/webm">`;
+                videoPlayer.load();
                 responseText.textContent = data.llm_response;
                 
                 // Update processing times
