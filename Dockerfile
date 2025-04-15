@@ -37,7 +37,12 @@ if [ -z "$HF_TOKEN" ]; then\n\
   exit 1\n\
 fi\n\
 huggingface-cli login --token $HF_TOKEN\n\
-python3 main.py' > /app/start.sh && chmod +x /app/start.sh
+python3 main_refine.py' > /app/start.sh && chmod +x /app/start.sh
+
+# Conda ffmpeg 제거 + libvpx 지원 ffmpeg 설치
+RUN conda remove -y ffmpeg && \
+    apt-get update && \
+    apt-get install -y ffmpeg libvpx-dev libopus-dev
 
 # 컨테이너 시작 시 실행할 명령
 CMD ["/app/start.sh"]

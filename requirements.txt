@@ -16,3 +16,5 @@ openai>=1.0.0
 transformers>=4.36.0
 accelerate>=0.20.0 
 deepspeed
+six>=1.16.0
+Pillow

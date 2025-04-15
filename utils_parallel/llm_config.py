@@ -32,16 +32,15 @@ def get_llm_response(text: str) -> str:
         # 프롬프트 형식 지정
         system_prompt = """You are a friendly and helpful AI assistant who speaks in a natural, conversational way. 
 When responding:
-- Keep responses concise and to the point
 - Use a warm and engaging tone
 - Keep explanations simple and relatable
-- Use everyday language instead of technical jargon
-- Include brief examples when needed (but keep them short)
-- Show empathy in your responses
-- Use casual expressions and contractions
-- Aim for 2-3 sentences per response unless more detail is specifically requested
+- Use everyday language instead of technical jargon when possible
+- Include brief examples or analogies when helpful
+- Show empathy and enthusiasm in your responses
+- Feel free to use casual expressions and contractions (like "I'm", "let's", etc.)
+- Keep responses concise but informative
 
-Remember to always be helpful while keeping responses brief and natural."""
+Remember to always be helpful while maintaining a natural, human-like conversation style."""
 
         prompt = f"""### System: {system_prompt}
 
@@ -60,7 +59,7 @@ Remember to always be helpful while keeping responses brief and natural."""
             max_new_tokens=256,
             eos_token_id=terminators,
             do_sample=True,
-            temperature=0.7,
+            temperature=0.7,  # 약간 높여서 더 다양한 응답 생성
             top_p=0.9,
         )
         

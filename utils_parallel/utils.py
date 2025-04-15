@@ -7,13 +7,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 현재 디렉토리 설정
-current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+current_dir = "/workspace/hkkim/fast-tts-api"
 
-# Wav2Lip API URL 설정
-WAV2LIP_HOST = os.getenv("WAV2LIP_HOST")
-if WAV2LIP_HOST is None:
-    raise RuntimeError("환경변수 'WAV2LIP_HOST'가 설정되지 않았습니다.")
-WAV2LIP_API_URL = f"http://{WAV2LIP_HOST}/inference"
+static_dir = os.path.join(current_dir, "static")
+outputs_dir = os.path.join(current_dir, "outputs")
+
+WAV2LIP_API_URL = "http://220.118.109.65:8000/inference"
 
 def audio_array_to_wav_bytes(audio_array: np.ndarray, sample_rate: int = 24000) -> bytes:
     """
