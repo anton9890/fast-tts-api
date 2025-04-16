@@ -133,7 +133,7 @@ def initialize_tts():
         tts_model.to(device)
         
         # 기본 스피커 임베딩 계산
-        reference_audio_path = "input/tts_input.wav"
+        reference_audio_path = "input/tts_input2.wav"
         gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(audio_path=[reference_audio_path])
         
         return tts_model, tts_config, gpt_cond_latent, speaker_embedding
