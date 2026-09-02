@@ -61,9 +61,6 @@ def initialize_tts():
     # tts_model.get_conditioning_latents 함수에 리스트 전달
     gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(audio_path=reference_audio_paths)
     
-    # 기본 스피커 임베딩 계산
-    # reference_audio_path = os.path.join(model_path, "/workspace/hkkim/fast-tts-api/models/xtts_v2/input/audio.wav")
-    # gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(audio_path=[reference_audio_path])
     
     return tts_model, tts_config, gpt_cond_latent, speaker_embedding
 

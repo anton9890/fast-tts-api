@@ -1,9 +1,13 @@
+import os
 import time
 
 def call_wav2lip_api(audio: bytes) -> bytes:
   import requests
   from io import BytesIO
-  url = "http://220.118.109.65:8000/inference"
+  host = os.getenv("WAV2LIP_HOST")
+  if host is None:
+    raise RuntimeError("환경변수 'WAV2LIP_HOST'가 설정되지 않았습니다.")
+  url = f"http://{host}/inference"
   # BytesIO 객체로 감싸서 requests에서 업로드할 수 있도록 처리
   audio_file = BytesIO(audio)
   audio_file.name = "input.wav" # 업로드될 파일 이름 설정
