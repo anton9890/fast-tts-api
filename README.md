@@ -1,8 +1,8 @@
 <div align="center">
 
-# Fast TTS API
+# LLM-TTS Talking Face
 
-### Real-time Interactive Talking Face — LLM → TTS → Wav2Lip → Super-Resolution
+### Real-time interactive avatar serving — LLM → TTS → Wav2Lip → Super-Resolution
 
 A FastAPI serving pipeline that turns a text question into a **lip-synced talking-face video**
 of a cloned speaker, streaming sentence-by-sentence so synthesis and video generation overlap.
@@ -143,18 +143,28 @@ compared directly on your own hardware.
 ### Docker
 
 ```bash
-docker build -t fast-tts-api .
-docker run --gpus all -p 8000:8000 -e HF_TOKEN=<your_hf_token> fast-tts-api
+docker build -t llm-tts-talking-face .
+docker run --gpus all -p 8000:8000 \
+  -e HF_TOKEN=<your_hf_token> \
+  -e WAV2LIP_HOST=<host:port> \
+  llm-tts-talking-face
 ```
 
-`HF_TOKEN` is required — the image logs into Hugging Face at startup to pull the gated
-Llama-3.2 weights. XTTS-v2 is downloaded automatically on first run.
+### Environment variables
+
+| Variable | Required | Description |
+|---|:--:|---|
+| `HF_TOKEN` | ✅ | Hugging Face token — the server logs in at startup to pull the gated Llama-3.2 weights |
+| `WAV2LIP_HOST` | ✅ | Host and port of the Wav2Lip inference service, e.g. `10.0.0.5:8000` |
+
+XTTS-v2 is downloaded automatically on first run.
 
 ### Local
 
 ```bash
 pip install -r requirements.txt
 huggingface-cli login
+export WAV2LIP_HOST=<host:port>
 python main_refine_parallel.py          # serves on :8000
 ```
 
@@ -164,13 +174,13 @@ Then open `http://localhost:8000`.
 
 - Python 3.10+, CUDA 12.1+ GPU
 - `ffmpeg` built with `libvpx` (WebM output)
-- A reachable **Wav2Lip inference API** — set `WAV2LIP_API_URL` in `utils_parallel/utils.py`.
+- A reachable **Wav2Lip inference API**, pointed to by `WAV2LIP_HOST`.
   This repository serves the orchestration layer; the talking-face model runs as a separate service.
 
 ## Project structure
 
 ```
-fast-tts-api/
+llm-tts-talking-face/
 ├── main.py                      # full server (web UI + streaming)
 ├── main_refine.py               # sequential baseline
 ├── main_refine_parallel.py      # parallel producer–consumer server
@@ -199,8 +209,7 @@ fast-tts-api/
 
 ## Notes
 
-- The Wav2Lip API URL and output paths are set for the lab environment used during development;
-  change them before running elsewhere.
+- All external endpoints are supplied through environment variables — nothing is hardcoded.
 - Model weights and generated media are not tracked in this repository.
 
 ## Author

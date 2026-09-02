@@ -1,6 +1,6 @@
 <div align="center">
 
-# Fast TTS API
+# LLM-TTS Talking Face
 
 ### 실시간 대화형 말하는 아바타 — LLM → TTS → Wav2Lip → 초해상화
 
@@ -139,11 +139,20 @@ TTS 워커는 이미 *n+1*번째 문장을 합성하고 있습니다.
 ### Docker
 
 ```bash
-docker build -t fast-tts-api .
-docker run --gpus all -p 8000:8000 -e HF_TOKEN=<발급받은_HF_토큰> fast-tts-api
+docker build -t llm-tts-talking-face .
+docker run --gpus all -p 8000:8000 \
+  -e HF_TOKEN=<발급받은_HF_토큰> \
+  -e WAV2LIP_HOST=<호스트:포트> \
+  llm-tts-talking-face
 ```
 
-`HF_TOKEN`은 필수입니다. 컨테이너 시작 시 Hugging Face에 로그인해 접근 제한된 Llama-3.2 가중치를 받아옵니다.
+### 환경변수
+
+| 변수 | 필수 | 설명 |
+|---|:--:|---|
+| `HF_TOKEN` | ✅ | Hugging Face 토큰 — 서버 기동 시 로그인해 접근 제한된 Llama-3.2 가중치를 받아옵니다 |
+| `WAV2LIP_HOST` | ✅ | Wav2Lip 추론 서비스의 호스트·포트 (예: `10.0.0.5:8000`) |
+
 XTTS-v2는 최초 실행 시 자동으로 다운로드됩니다.
 
 ### 로컬
@@ -151,6 +160,7 @@ XTTS-v2는 최초 실행 시 자동으로 다운로드됩니다.
 ```bash
 pip install -r requirements.txt
 huggingface-cli login
+export WAV2LIP_HOST=<호스트:포트>
 python main_refine_parallel.py          # 8000번 포트
 ```
 
@@ -160,13 +170,13 @@ python main_refine_parallel.py          # 8000번 포트
 
 - Python 3.10+, CUDA 12.1+ GPU
 - `libvpx`가 포함된 `ffmpeg` (WebM 출력용)
-- 접근 가능한 **Wav2Lip 추론 API** — `utils_parallel/utils.py`의 `WAV2LIP_API_URL` 수정 필요.
+- `WAV2LIP_HOST`가 가리키는 **Wav2Lip 추론 API** 접근 가능해야 합니다.
   이 저장소는 오케스트레이션 계층이며, Talking Face 모델은 별도 서비스로 동작합니다.
 
 ## 프로젝트 구조
 
 ```
-fast-tts-api/
+llm-tts-talking-face/
 ├── main.py                      # 전체 서버 (웹 UI + 스트리밍)
 ├── main_refine.py               # 순차 처리 베이스라인
 ├── main_refine_parallel.py      # 병렬 producer-consumer 서버
@@ -195,7 +205,7 @@ fast-tts-api/
 
 ## 참고
 
-- Wav2Lip API 주소와 출력 경로는 개발 당시 연구실 환경 기준입니다. 다른 환경에서는 수정이 필요합니다.
+- 외부 엔드포인트는 모두 환경변수로 주입받으며, 코드에 하드코딩된 주소는 없습니다.
 - 모델 가중치와 생성된 미디어는 저장소에 포함되어 있지 않습니다.
 
 ## 작성자
