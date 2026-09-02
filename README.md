@@ -32,11 +32,16 @@ The application target was an **interactive digital human** that answers visitor
 fashion exhibition: it had to reproduce not only a person's appearance and voice, but respond
 **in real time**, which is what makes the latency work below the core of the project.
 
-```
-Question  →  LLM  →  Answer text  →  TTS (cloned voice)  →  Talking Face  →  SR  →  Video answer
-```
+<div align="center">
+<img src="docs/pipeline.png" width="840" alt="Interactive talking face pipeline">
+<br>
+<sub>System pipeline as presented at the symposium — faces masked, speaker identity anonymized.</sub>
+</div>
 
 ## Architecture
+
+This repository implements the **serving layer** of that pipeline — orchestration, streaming and
+video assembly. The LLM and Wav2Lip models run as separate services.
 
 ```mermaid
 flowchart LR
